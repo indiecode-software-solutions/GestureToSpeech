@@ -128,6 +128,22 @@ export default function Account() {
     };
   }, []);
 
+  const filteredVoices = useMemo(() => {
+    // Novelty/System voices to exclude
+    const noiseVoices = [
+      'Bad News', 'Bells', 'Boing', 'Bubbles', 'Cellos', 'Deranged', 
+      'Good News', 'Hysterical', 'Pipe Organ', 'Trinoids', 'Whisper', 'Zarvox',
+      'Albert', 'Bahh', 'Bells', 'Boing', 'Bubbles', 'Cellos', 'Hysterical',
+      'Junior', 'Kathy', 'Princess', 'Ralph', 'Trinoids', 'Whisper', 'Zarvox'
+    ];
+    
+    return voices.filter(v => {
+      const isEnglish = v.lang.startsWith('en');
+      const isSystemNoise = noiseVoices.some(name => v.name.includes(name));
+      return isEnglish && !isSystemNoise;
+    });
+  }, [voices]);
+
   const stats = useMemo(() => {
     const entries = Object.entries(classes);
     const totalSamples = entries.reduce((sum, [, count]) => sum + count, 0);
@@ -166,8 +182,11 @@ export default function Account() {
     } else {
       // 3. Fallback to best available system voice
       const preferredVoice =
+        allVoices.find(v => v.name === "Google UK English Female") ||
+        allVoices.find(v => v.name.includes("Microsoft") && v.name.includes("Online")) ||
+        allVoices.find(v => v.name.includes("Google") && v.name.includes("Online")) ||
+        allVoices.find(v => v.name.includes("Natural")) ||
         allVoices.find(v => v.name.includes("Google US English") && v.lang.includes("en")) ||
-        allVoices.find(v => v.name.includes("Natural") || v.name.includes("Online")) ||
         allVoices.find(v => v.name.includes("Samantha") || v.name.includes("Siri")) ||
         allVoices.find(v => v.name.includes("Female") && v.lang.startsWith("en"));
 
@@ -290,9 +309,9 @@ export default function Account() {
                 onChange={(e) => setVoiceSettings((prev) => ({ ...prev, voiceName: e.target.value }))}
               >
                 <option value="">Default</option>
-                {voices.map((voice) => (
+                {filteredVoices.map((voice) => (
                   <option key={`${voice.name}-${voice.lang}`} value={voice.name}>
-                    {voice.name} ({voice.lang})
+                    {voice.name}
                   </option>
                 ))}
               </select>

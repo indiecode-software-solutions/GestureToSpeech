@@ -197,6 +197,12 @@ export default function Dashboard() {
     const [isSmartMode, setIsSmartMode] = useState(false);
     const [isPolishing, setIsPolishing] = useState(false);
     const [polishedSentence, setPolishedSentence] = useState("");
+    const [fps, setFps] = useState(0);
+    const lastAddedGesture = useRef("");
+    const [currentLandmarks, setCurrentLandmarks] = useState(null);
+    const [currentVolume, setCurrentVolume] = useState(1.0);
+    const [sentenceData, setSentenceData] = useState([]); // [{text, volume}]
+    const [availableVoices, setAvailableVoices] = useState([]);
 
     // Auth Context
     const { currentUser, logout } = useAuth();
@@ -439,7 +445,13 @@ export default function Dashboard() {
                                         parsed[key] = tf.tensor(dataset[key].data, dataset[key].shape);
                                     }
                                     classifier.current.setClassifierDataset(parsed);
-                                    setTrainingData(savedData.classes || {});
+                                    const cleanClasses = {};
+                                    if (savedData.classes) {
+                                        Object.entries(savedData.classes).forEach(([k, v]) => {
+                                            if (k !== "null" && k !== "undefined") cleanClasses[k] = v;
+                                        });
+                                    }
+                                    setTrainingData(cleanClasses);
                                     console.log('✅ Restored saved gestures from Supabase');
                                 }
                             }
@@ -461,6 +473,7 @@ export default function Dashboard() {
 
     // Add a new gesture class (just register it with 0 examples)
     const addClass = (label) => {
+        if (!label || label === "null" || label === "undefined") return;
         setTrainingData(prev => ({
             ...prev,
             [label]: prev[label] || 0
@@ -468,8 +481,8 @@ export default function Dashboard() {
     };
 
     // Save model to DB
-    const saveModel = async () => {
-        if (!classifier.current || classifier.current.getNumClasses() === 0 || !currentUser) return;
+    const saveModel = async (overrideData = null) => {
+        if (!classifier.current || !currentUser) return;
         try {
             const dataset = classifier.current.getClassifierDataset();
             const serializedDataset = {};
@@ -482,7 +495,7 @@ export default function Dashboard() {
 
             const modelData = {
                 dataset: serializedDataset,
-                classes: trainingData
+                classes: overrideData || trainingData
             };
 
             const { error } = await supabase
@@ -516,20 +529,61 @@ export default function Dashboard() {
     const clearClass = async (label) => {
         if (classifier.current) {
             classifier.current.clearClass(label);
-            setTrainingData(prev => {
-                const newData = { ...prev };
-                delete newData[label];
-                return newData;
-            });
+            const newData = { ...trainingData };
+            delete newData[label];
+            setTrainingData(newData);
 
-            // Save empty/updated model
+            // Auto-save the updated empty/reduced model
             if (classifier.current.getNumClasses() === 0) {
                 mlPredictionRef.current = null;
-                // Ideally delete from DB or save empty, here saving empty
-                saveModel();
-            } else {
-                saveModel();
             }
+            saveModel(newData);
+        }
+    };
+
+    const drawHolographicEffects = (ctx, landmarks, width, height) => {
+        // 1. Grid & Bounding Box
+        if (landmarks) {
+            const minX = Math.min(...landmarks.map(p => p.x)) * width;
+            const maxX = Math.max(...landmarks.map(p => p.x)) * width;
+            const minY = Math.min(...landmarks.map(p => p.y)) * height;
+            const maxY = Math.max(...landmarks.map(p => p.y)) * height;
+
+            const padding = 30;
+            const bX = minX - padding;
+            const bY = minY - padding;
+            const bW = (maxX - minX) + padding * 2;
+            const bH = (maxY - minY) + padding * 2;
+
+            // Grid Lines
+            ctx.strokeStyle = "rgba(0, 242, 255, 0.15)";
+            ctx.lineWidth = 1;
+            const gridSize = 25;
+            ctx.beginPath();
+            for (let x = bX; x <= bX + bW; x += gridSize) {
+                ctx.moveTo(x, bY);
+                ctx.lineTo(x, bY + bH);
+            }
+            for (let y = bY; y <= bY + bH; y += gridSize) {
+                ctx.moveTo(bX, y);
+                ctx.lineTo(bX + bW, y);
+            }
+            ctx.stroke();
+
+            // Bounding Box Corners
+            ctx.strokeStyle = "var(--hologram-cyan)";
+            ctx.lineWidth = 2;
+            const cornerSize = 15;
+            ctx.beginPath();
+            // TL
+            ctx.moveTo(bX, bY + cornerSize); ctx.lineTo(bX, bY); ctx.lineTo(bX + cornerSize, bY);
+            // TR
+            ctx.moveTo(bX + bW - cornerSize, bY); ctx.lineTo(bX + bW, bY); ctx.lineTo(bX + bW, bY + cornerSize);
+            // BR
+            ctx.moveTo(bX + bW, bY + bH - cornerSize); ctx.lineTo(bX + bW, bY + bH); ctx.lineTo(bX + bW - cornerSize, bY + bH);
+            // BL
+            ctx.moveTo(bX + cornerSize, bY + bH); ctx.lineTo(bX, bY + bH); ctx.lineTo(bX, bY + bH - cornerSize);
+            ctx.stroke();
         }
     };
 
@@ -547,7 +601,7 @@ export default function Dashboard() {
         });
 
         hands.onResults((results) => {
-            if (!canvasRef.current) return;
+            if (!canvasRef.current || !results.image) return;
             const canvasCtx = canvasRef.current.getContext("2d");
             const nowFrame = Date.now();
             const delta = nowFrame - lastFrameTime.current;
@@ -572,24 +626,38 @@ export default function Dashboard() {
 
             if (results.multiHandLandmarks.length > 0) {
                 setHandDetected(true);
+                const landmarks = results.multiHandLandmarks[0];
+                setCurrentLandmarks(landmarks);
 
-                if (results.multiHandLandmarks.length > 0) {
-                    const landmarks = results.multiHandLandmarks[0];
+                // Vocal Urgency: Map Y position to volume
+                // Higher in frame (low Y) = Higher Volume
+                const wristY = landmarks[0].y;
+                // Aggressive mapping: top (0) -> 1.0, bottom (1) -> 0.1
+                const calculatedVol = Math.max(0.1, Math.min(1.0, (1.1 - wristY) * 1.1));
+                setCurrentVolume(calculatedVol);
 
-                    drawConnectors(canvasCtx, landmarks, Hands.HAND_CONNECTIONS, {
-                        color: "rgba(224, 225, 221, 0.5)",
-                        lineWidth: 2,
-                    });
-                    drawLandmarks(canvasCtx, landmarks, {
-                        color: "#E0E1DD",
-                        lineWidth: 1,
-                        radius: 2,
-                    });
+                // Drawing MediaPipe connectors with custom style
+                drawConnectors(canvasCtx, landmarks, (HandsNS.HAND_CONNECTIONS || Hands.HAND_CONNECTIONS), {
+                    color: "#10b981",
+                    lineWidth: 2,
+                });
+                drawLandmarks(canvasCtx, landmarks, {
+                    color: "#FFFFFF",
+                    lineWidth: 1,
+                    radius: 3,
+                });
+
+                // Holographic Effects
+                drawHolographicEffects(canvasCtx, landmarks, canvasRef.current.width, canvasRef.current.height);
 
                     // --- Machine Learning Logic ---
                     if (classifier.current && tfRef.current) {
                         const tf = tfRef.current;
-                        const features = tf.tensor(landmarks.map(p => [p.x, p.y, p.z]).flat());
+                        // Normalize landmarks relative to the wrist (landmark 0) for position-invariant detection
+                        const wrist = landmarks[0];
+                        const features = tf.tensor(
+                            landmarks.map(p => [p.x - wrist.x, p.y - wrist.y, p.z - wrist.z]).flat()
+                        );
 
                         // Training Mode — continuously captures while button held
                         if (trainingLabel.current) {
@@ -600,8 +668,8 @@ export default function Dashboard() {
                             }));
                         }
 
-                        // Prediction Mode
-                        if (classifier.current.getNumClasses() > 0 && !trainingLabel.current) {
+                        // Prediction Mode - only if we have at least 2 classes to contrast against
+                        if (classifier.current.getNumClasses() > 1 && !trainingLabel.current) {
                             classifier.current.predictClass(features).then(result => {
                                 if (result.confidences[result.label] > 0.8) {
                                     mlPredictionRef.current = { label: result.label, confidence: result.confidences[result.label] };
@@ -626,9 +694,14 @@ export default function Dashboard() {
                         setConfidence(prediction.confidence);
                         lastGestureTime.current = Date.now();
                         const now = Date.now();
-                        if (now - lastAddedTime.current > 1000) {
-                            setSentence((prev) => prev + stable);
+                        if (now - lastAddedTime.current > 1200 && stable !== lastAddedGesture.current) {
+                            setSentenceData(prev => [...prev, { text: stable, volume: calculatedVol }]);
+                            setSentence((prev) => {
+                                const needsLeadingSpace = prev.length > 0 && prev.slice(-1) !== " ";
+                                return prev + (needsLeadingSpace ? " " : "") + stable + " ";
+                            });
                             lastAddedTime.current = now;
+                            lastAddedGesture.current = stable;
 
                             const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                             setHistory((prev) => [
@@ -637,7 +710,6 @@ export default function Dashboard() {
                             ].slice(0, 50));
                         }
                     }
-                }
             } else {
                 setHandDetected(false);
             }
@@ -657,14 +729,49 @@ export default function Dashboard() {
         if (videoRef.current) {
             const camera = new Camera(videoRef.current, {
                 onFrame: async () => {
-                    await hands.send({ image: videoRef.current });
+                    if (videoRef.current && videoRef.current.readyState >= 2) {
+                        await hands.send({ image: videoRef.current });
+                    }
                 },
                 width: 640,
                 height: 480,
             });
             camera.start();
+
+            return () => {
+                camera.stop();
+                hands.close();
+            };
         }
     }, []);
+
+    useEffect(() => {
+        const loadVoices = () => {
+            const v = window.speechSynthesis.getVoices();
+            if (v.length > 0) setAvailableVoices(v);
+        };
+        loadVoices();
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+        return () => { window.speechSynthesis.onvoiceschanged = null; };
+    }, []);
+    
+    // Auto-Polishing for Live Smart Mode
+    useEffect(() => {
+        if (!isSmartMode || !sentence.trim()) {
+            setPolishedSentence("");
+            return;
+        }
+
+        const timer = setTimeout(async () => {
+            // Only polish if the current sentence is different from the last one we polished
+            if (sentence.trim() !== lastAutoSpokenSentenceRef.current) {
+                const polished = await polishSentence(sentence);
+                setPolishedSentence(polished);
+            }
+        }, 1500); // Polish after 1.5 seconds of silence
+
+        return () => clearTimeout(timer);
+    }, [sentence, isSmartMode]);
 
     const polishSentence = async (rawText) => {
         if (!rawText || rawText.trim() === "") return "";
@@ -719,8 +826,12 @@ export default function Dashboard() {
 
         let textToSpeak = text;
 
-        // If Smart Mode is on and this is the main sentence, polish it first
-        if (isSmartMode && !options.fromAuto && text.trim() === sentence.trim()) {
+        // If Smart Mode is on and we already have a polished version, use it
+        if (isSmartMode && polishedSentence && text.trim() === sentence.trim()) {
+            textToSpeak = polishedSentence;
+        } 
+        // Otherwise, if Smart Mode is on but not yet polished, polish now (backup)
+        else if (isSmartMode && !options.fromAuto && text.trim() === sentence.trim()) {
             textToSpeak = await polishSentence(text);
         }
 
@@ -728,7 +839,7 @@ export default function Dashboard() {
             lastAutoSpokenSentenceRef.current = text.trim();
         }
 
-        let voiceSettings = { rate: 0.9, pitch: 1.05, voiceName: '' };
+        let voiceSettings = { rate: 0.9, pitch: 1.05, voiceName: '', volume: currentVolume };
         try {
             const parsed = JSON.parse(localStorage.getItem('isl-voice-settings') || '{}');
             voiceSettings = {
@@ -742,44 +853,56 @@ export default function Dashboard() {
 
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        const allVoices = window.speechSynthesis.getVoices();
+        
+        // Use either preloaded voices or fetch fresh ones
+        const allVoices = availableVoices.length > 0 ? availableVoices : window.speechSynthesis.getVoices();
 
         // 1. If user chose a specific voice, use it directly via browser API
         if (voiceSettings.voiceName) {
             const selected = allVoices.find(v => v.name === voiceSettings.voiceName);
             if (selected) {
                 utterance.voice = selected;
-                utterance.rate = selected.name.includes("Google") ? (voiceSettings.rate || 0.9) * 1.1 : (voiceSettings.rate || 0.9);
+                utterance.rate = selected.name.includes("Google") ? (voiceSettings.rate || 0.9) * 1.05 : (voiceSettings.rate || 0.9);
                 utterance.pitch = voiceSettings.pitch || 1.05;
+                utterance.volume = voiceSettings.volume || 1.0;
                 window.speechSynthesis.speak(utterance);
+                return;
+            }
+            // If the selected voice isn't loaded yet, don't fallback yet - wait 100ms and try once more
+            if (allVoices.length === 0) {
+                setTimeout(() => speak(text, options), 150);
                 return;
             }
         }
 
-        // 2. Fallback to ResponsiveVoice for "Natural" default if no specific voice selected
-        if (window.responsiveVoice && window.responsiveVoice.voiceSupport()) {
+        // 2. Default Priority logic if no manual selection or selection not found
+        const preferredVoice =
+            allVoices.find(v => v.name === "Google UK English Female") ||
+            allVoices.find(v => v.name.includes("Microsoft") && v.name.includes("Online")) ||
+            allVoices.find(v => v.name.includes("Google") && v.name.includes("Online")) ||
+            allVoices.find(v => v.name.includes("Natural")) ||
+            allVoices.find(v => v.name.includes("Google US English") && v.lang.includes("en")) ||
+            allVoices.find(v => v.name.includes("Samantha") || v.name.includes("Siri")) ||
+            allVoices.find(v => v.name.includes("Female") && v.lang.startsWith("en"));
+
+        if (preferredVoice) {
+            utterance.voice = preferredVoice;
+            utterance.rate = preferredVoice.name.includes("Online") || preferredVoice.name.includes("Google") 
+                ? (voiceSettings.rate || 0.9) * 1.05 
+                : (voiceSettings.rate || 0.9);
+        }
+
+        // 3. Last Fallback: ResponsiveVoice (only if no specific preference was made)
+        if (!voiceSettings.voiceName && window.responsiveVoice && window.responsiveVoice.voiceSupport()) {
             window.responsiveVoice.cancel();
             window.responsiveVoice.speak(textToSpeak, "UK English Female", {
                 pitch: voiceSettings.pitch || 1,
                 rate: (voiceSettings.rate || 0.9) * 1.1,
-                volume: 1
+                volume: voiceSettings.volume || 1
             });
         } else {
-            // 3. Fallback: browser speech with best available natural voice
-            const preferredVoice =
-                allVoices.find(v => v.name.includes("Google US English") && v.lang.includes("en")) ||
-                allVoices.find(v => v.name.includes("Natural") || v.name.includes("Online")) ||
-                allVoices.find(v => v.name.includes("Samantha") || v.name.includes("Siri")) ||
-                allVoices.find(v => v.name.includes("Female") && v.lang.startsWith("en"));
-
-            if (preferredVoice) {
-                utterance.voice = preferredVoice;
-                utterance.rate = preferredVoice.name.includes("Google") ? (voiceSettings.rate || 0.9) * 1.1 : (voiceSettings.rate || 0.9);
-            } else {
-                utterance.rate = voiceSettings.rate || 0.9;
-            }
-            
             utterance.pitch = voiceSettings.pitch || 1.05;
+            utterance.volume = voiceSettings.volume || 1.0;
             window.speechSynthesis.speak(utterance);
         }
     };
@@ -999,6 +1122,51 @@ export default function Dashboard() {
                     </div>
 
                     <div className="camera-wrapper">
+                        {/* Holographic HUD Elements */}
+                        <div className="scanning-grid-overlay">
+                            <div className="hud-corner top-left"></div>
+                            <div className="hud-corner top-right"></div>
+                            <div className="hud-corner bottom-left"></div>
+                            <div className="hud-corner bottom-right"></div>
+                        </div>
+
+                        {/* Neural Data Sidebar */}
+                        <AnimatePresence>
+                            {handDetected && currentLandmarks && (
+                                <motion.div 
+                                    initial={{ opacity: 0, x: 20 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    exit={{ opacity: 0, x: 20 }}
+                                    className="neural-data-sidebar"
+                                >
+                                    <div className="neural-data-header">
+                                        <Activity size={12} />
+                                        <span>Neural Link Active</span>
+                                    </div>
+                                    <div className="neural-data-stream">
+                                        {[0, 4, 8, 12, 16, 20].map((idx) => (
+                                            <div key={idx} className="data-point">
+                                                <span className="data-label">
+                                                    {idx === 0 ? 'WRIST' : 
+                                                     idx === 4 ? 'THUMB' : 
+                                                     idx === 8 ? 'INDEX' : 
+                                                     idx === 12 ? 'MIDDLE' : 
+                                                     idx === 16 ? 'RING' : 'PINKY'}
+                                                </span>
+                                                <span className="data-value">
+                                                    {currentLandmarks[idx].x.toFixed(2)}, {currentLandmarks[idx].y.toFixed(2)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                        <div className="data-point" style={{ marginTop: '8px', borderTop: '1px solid rgba(0, 242, 255, 0.2)', paddingTop: '4px' }}>
+                                            <span className="data-label">SYS_LATENCY</span>
+                                            <span className="data-value">{fps > 0 ? Math.round(1000/fps) : 0}ms</span>
+                                        </div>
+                                    </div>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+
                         <div className="overlay-top-left">
                             <div className="live-indicator">
                                 <div className="dot"></div> Live Feed
@@ -1152,53 +1320,100 @@ export default function Dashboard() {
                                 </div>
                                 <span className="text-overline" style={{ color: 'var(--text-main)', cursor: 'pointer', margin: 0 }} onClick={() => {
                                     setSentence("");
+                                    setSentenceData([]);
                                     setPolishedSentence("");
                                 }}>Clear</span>
                             </div>
                         </div>
-                        <div style={{ position: 'relative', flex: 1 }}>
-                            <textarea
-                                className={`output-box ${isSmartMode ? 'smart-active' : ''}`}
-                                value={sentence}
-                                onChange={(e) => setSentence(e.target.value)}
-                                placeholder="Translated text will appear here..."
-                                spellCheck="false"
-                                style={{
-                                    width: '100%',
-                                    height: '100%',
-                                    resize: 'none',
-                                    backgroundColor: 'var(--bg-deep)',
-                                    border: '1px solid var(--bg-surface)',
-                                    outline: 'none',
-                                    color: 'var(--text-main)',
-                                    padding: '16px',
-                                    borderRadius: '8px',
-                                    fontSize: '18px',
-                                    lineHeight: '1.6',
-                                    fontFamily: 'inherit'
-                                }}
-                            />
+
+                        <div className="output-container" style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: '180px' }}>
                             {isPolishing && (
-                                <div className="polishing-overlay">
-                                    <Loader2 className="animate-spin" size={24} />
-                                    <span>AI is polishing...</span>
+                                <div style={{ 
+                                    position: 'absolute',
+                                    top: '12px',
+                                    right: '12px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    color: 'var(--accent)',
+                                    background: 'rgba(0,0,0,0.8)',
+                                    padding: '4px 12px',
+                                    borderRadius: '20px',
+                                    fontSize: '12px',
+                                    backdropFilter: 'blur(10px)',
+                                    border: '1px solid var(--glass-border)',
+                                    zIndex: 20
+                                }}>
+                                    <Loader2 className="animate-spin" size={12} />
+                                    <span>AI Refining...</span>
                                 </div>
                             )}
-                        </div>
-                        
-                        {isSmartMode && polishedSentence && (
-                            <motion.div 
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="polished-box"
+
+                            {/* Highlighting Backdrop (Behind Textarea) */}
+                            <div 
+                                className="output-backdrop"
+                                aria-hidden="true"
+                                style={{ 
+                                    position: 'absolute',
+                                    inset: 0,
+                                    padding: '16px',
+                                    fontSize: '18px',
+                                    lineHeight: '1.6',
+                                    fontFamily: 'inherit',
+                                    whiteSpace: 'pre-wrap',
+                                    wordWrap: 'break-word',
+                                    color: 'transparent',
+                                    pointerEvents: 'none',
+                                    zIndex: 1,
+                                    overflow: 'hidden'
+                                }}
                             >
-                                <div className="polished-header">
-                                    <Sparkles size={12} />
-                                    <span>AI POLISHED</span>
-                                </div>
-                                <p>{polishedSentence}</p>
-                            </motion.div>
-                        )}
+                                {!(isSmartMode && polishedSentence) && sentenceData.length > 0 && (
+                                    sentenceData.map((word, i) => (
+                                        <span 
+                                            key={i} 
+                                            style={{ 
+                                                color: 'transparent',
+                                                textShadow: word.volume > 0.8 ? '0 0 12px rgba(0, 242, 255, 0.6)' : 'none',
+                                                fontWeight: word.volume > 0.8 ? 700 : 400
+                                            }}
+                                        >
+                                            {word.text}{' '}
+                                        </span>
+                                    ))
+                                )}
+                            </div>
+
+                            {/* Actual Interactive Textarea */}
+                            <textarea 
+                                className={`output-box ${isSmartMode ? 'smart-active' : ''}`}
+                                value={isSmartMode && polishedSentence ? polishedSentence : sentence}
+                                onChange={(e) => {
+                                    const text = e.target.value;
+                                    setSentence(text);
+                                    if (isSmartMode) setPolishedSentence(text);
+                                    if (sentenceData.length > 0) setSentenceData([]); 
+                                }}
+                                spellCheck="false"
+                                placeholder="Your translated gestures will appear here..."
+                                style={{ 
+                                    flex: 1,
+                                    position: 'relative',
+                                    background: 'var(--bg-deep)',
+                                    color: (isSmartMode && polishedSentence) ? 'var(--accent)' : 'var(--text-main)',
+                                    padding: '16px',
+                                    fontSize: '18px',
+                                    lineHeight: '1.6',
+                                    borderRadius: '12px',
+                                    border: '1px solid var(--bg-surface)',
+                                    outline: 'none',
+                                    resize: 'none',
+                                    zIndex: 2,
+                                    fontFamily: 'inherit',
+                                    transition: 'color 0.3s'
+                                }}
+                            />
+                        </div>
                     </div>
 
                     {/* Action Buttons */}

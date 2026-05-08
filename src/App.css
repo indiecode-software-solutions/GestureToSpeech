@@ -38,6 +38,11 @@
 
   /* Transitions */
   --ease-standard: cubic-bezier(0.4, 0.0, 0.2, 1);
+
+  /* Holographic Colors */
+  --hologram-cyan: #00f2ff;
+  --hologram-blue: #0066ff;
+  --hologram-glow: rgba(0, 242, 255, 0.4);
 }
 
 * {
@@ -507,3 +512,80 @@ body {
   border-style: dotted;
   font-size: 16px;
 }
+
+/* --- Holographic Scanning UI --- */
+
+.neural-data-sidebar {
+  position: absolute;
+  top: 80px;
+  right: 20px;
+  width: 180px;
+  background: rgba(13, 27, 42, 0.7);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 242, 255, 0.2);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  z-index: 30;
+  font-family: 'Space Mono', 'Courier New', monospace;
+  pointer-events: none;
+  box-shadow: 0 0 20px rgba(0, 242, 255, 0.1);
+}
+
+.neural-data-header {
+  font-size: 9px;
+  color: var(--hologram-cyan);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.neural-data-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.data-point {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: rgba(224, 225, 221, 0.8);
+}
+
+.data-label {
+  color: var(--hologram-cyan);
+  opacity: 0.7;
+}
+
+.data-value {
+  color: var(--text-platinum);
+  animation: flicker 0.5s infinite alternate;
+}
+
+@keyframes flicker {
+  0% { opacity: 0.8; }
+  100% { opacity: 1; text-shadow: 0 0 5px var(--hologram-cyan); }
+}
+
+.scanning-grid-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.hud-corner {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--hologram-cyan);
+  opacity: 0.5;
+}
+
+.top-left { top: 20px; left: 20px; border-right: none; border-bottom: none; }
+.top-right { top: 20px; right: 20px; border-left: none; border-bottom: none; }
+.bottom-left { bottom: 20px; left: 20px; border-right: none; border-top: none; }
+.bottom-right { bottom: 20px; right: 20px; border-left: none; border-top: none; }
