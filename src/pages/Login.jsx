@@ -31,7 +31,7 @@ export default function Login({ initialMode = 'login' }) {
 
             navigate('/');
         } catch (err) {
-            setError(err.error || (mode === 'signup' ? 'Failed to create account' : 'Failed to log in'));
+            setError(err.message || err.error || (mode === 'signup' ? 'Failed to create account' : 'Failed to log in'));
         }
 
         setLoading(false);

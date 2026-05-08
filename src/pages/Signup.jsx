@@ -22,7 +22,7 @@ export default function Signup() {
             await signup(email, password, name);
             navigate('/');
         } catch (err) {
-            setError(err.error || 'Failed to create account');
+            setError(err.message || err.error || 'Failed to create account');
         }
         setLoading(false);
     }

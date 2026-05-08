@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Clipboard, Clock3, LogOut, Plus, Volume2 } from 'lucide-react';
-import axios from 'axios';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
   DEFAULT_QUICK_RESPONSES,
@@ -46,11 +46,18 @@ export default function Account() {
     const loadModelSummary = async () => {
       if (!currentUser?.id) return;
       try {
-        const response = await axios.get(`/api/models?userId=${currentUser.id}`);
+        const { data, error } = await supabase
+          .from('models')
+          .select('data, updated_at')
+          .eq('user_id', currentUser.id)
+          .single();
+
         if (cancelled) return;
-        setClasses(response.data?.model?.classes || {});
-        setUpdatedAt(response.data?.updatedAt || null);
-      } catch {
+        if (data) {
+          setClasses(data.data?.classes || {});
+          setUpdatedAt(data.updated_at || null);
+        }
+      } catch (e) {
         if (!cancelled) {
           setStatus('Could not load model stats.');
         }
@@ -127,19 +134,6 @@ export default function Account() {
     return { classes: entries.length, totalSamples };
   }, [classes]);
 
-  const speak = (text) => {
-    if (!text?.trim()) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = voiceSettings.rate;
-    utterance.pitch = voiceSettings.pitch;
-    if (voiceSettings.voiceName) {
-      const selectedVoice = voices.find((voice) => voice.name === voiceSettings.voiceName);
-      if (selectedVoice) utterance.voice = selectedVoice;
-    }
-    window.speechSynthesis.speak(utterance);
-    setStatus('Spoken.');
-  };
 
   const copy = async (text) => {
     try {

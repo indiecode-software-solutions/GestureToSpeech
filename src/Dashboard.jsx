@@ -19,7 +19,7 @@ import {
     getQuickResponseStorageKey,
     normalizeQuickResponses,
 } from './data/quickResponses';
-import axios from 'axios';
+import { supabase } from './lib/supabase';
 import "./App.css";
 
 const QUICK_PANEL_KEY = 'q';
@@ -418,21 +418,27 @@ export default function Dashboard() {
                     knnModule.current = knn;
                     classifier.current = knn.create();
 
-                    // Restore saved model from DB (SQLite)
+                    // Restore saved model from Supabase
                     if (currentUser) {
                         try {
-                            const response = await axios.get(`/api/models?userId=${currentUser.id}`);
-                            const savedData = response.data.model;
+                            const { data, error } = await supabase
+                                .from('models')
+                                .select('data')
+                                .eq('user_id', currentUser.id)
+                                .single();
 
-                            if (savedData && savedData.dataset) {
-                                const dataset = savedData.dataset;
-                                const parsed = {};
-                                for (const key in dataset) {
-                                    parsed[key] = tf.tensor(dataset[key].data, dataset[key].shape);
+                            if (data && data.data) {
+                                const savedData = data.data;
+                                if (savedData.dataset) {
+                                    const dataset = savedData.dataset;
+                                    const parsed = {};
+                                    for (const key in dataset) {
+                                        parsed[key] = tf.tensor(dataset[key].data, dataset[key].shape);
+                                    }
+                                    classifier.current.setClassifierDataset(parsed);
+                                    setTrainingData(savedData.classes || {});
+                                    console.log('✅ Restored saved gestures from Supabase');
                                 }
-                                classifier.current.setClassifierDataset(parsed);
-                                setTrainingData(savedData.classes || {});
-                                console.log('✅ Restored saved gestures from DB');
                             }
                         } catch (e) {
                             console.warn('Could not restore saved model:', e);
@@ -476,11 +482,16 @@ export default function Dashboard() {
                 classes: trainingData
             };
 
-            await axios.post('/api/models', {
-                userId: currentUser.id,
-                modelData: modelData
-            });
-            console.log('✅ Model saved to DB');
+            const { error } = await supabase
+                .from('models')
+                .upsert({
+                    user_id: currentUser.id,
+                    data: modelData,
+                    updated_at: new Date()
+                }, { onConflict: 'user_id' });
+
+            if (error) throw error;
+            console.log('✅ Model saved to Supabase');
         } catch (e) {
             console.warn('Could not save model:', e);
         }
@@ -672,13 +683,12 @@ export default function Dashboard() {
             voiceSettings = { rate: 0.9, pitch: 1.05, voiceName: '' };
         }
 
-        // Use ResponsiveVoice for natural human-like voice
-        // "UK English Female" often sounds less robotic than the default US one
+        // Use ResponsiveVoice for natural human-like voice if available
         if (window.responsiveVoice && window.responsiveVoice.voiceSupport()) {
             window.responsiveVoice.cancel();
             window.responsiveVoice.speak(text, "UK English Female", {
-                pitch: voiceSettings.pitch,
-                rate: voiceSettings.rate,
+                pitch: voiceSettings.pitch || 1,
+                rate: (voiceSettings.rate || 0.9) * 1.1, // Slight boost for natural flow
                 volume: 1
             });
         } else {
@@ -687,19 +697,23 @@ export default function Dashboard() {
             const utterance = new SpeechSynthesisUtterance(text);
             const voices = window.speechSynthesis.getVoices();
 
-            // Pivot to find the most "human-like" system voice available
+            // Priority list for "natural" sounding voices
             const preferredVoice =
                 voices.find(v => voiceSettings.voiceName && v.name === voiceSettings.voiceName) ||
-                voices.find(v =>
-                    v.name.includes("Google US English") ||
-                    v.name.includes("Samantha") ||
-                    v.name.includes("Microsoft Zira") ||
-                    (v.name.includes("English") && v.name.includes("Female"))
-                );
+                voices.find(v => v.name.includes("Google US English") && v.lang.includes("en")) ||
+                voices.find(v => v.name.includes("Natural") || v.name.includes("Online")) ||
+                voices.find(v => v.name.includes("Samantha") || v.name.includes("Siri")) ||
+                voices.find(v => v.name.includes("Female") && v.lang.startsWith("en"));
 
-            if (preferredVoice) utterance.voice = preferredVoice;
-            utterance.rate = voiceSettings.rate;
-            utterance.pitch = voiceSettings.pitch;
+            if (preferredVoice) {
+                utterance.voice = preferredVoice;
+                // Neural/Google voices often need a slightly faster rate to sound natural
+                utterance.rate = preferredVoice.name.includes("Google") ? (voiceSettings.rate || 0.9) * 1.1 : (voiceSettings.rate || 0.9);
+            } else {
+                utterance.rate = voiceSettings.rate || 0.9;
+            }
+            
+            utterance.pitch = voiceSettings.pitch || 1.05;
             window.speechSynthesis.speak(utterance);
         }
     };
