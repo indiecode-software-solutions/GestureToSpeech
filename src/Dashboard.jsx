@@ -51,7 +51,7 @@ const PIP_STYLES = `
   .pip-shell.minimal .pip-card {
     padding: 8px;
     border-radius: 12px;
-  }
+    }
   .pip-overline {
     font-size: 11px;
     letter-spacing: 1px;
@@ -683,31 +683,40 @@ export default function Dashboard() {
             voiceSettings = { rate: 0.9, pitch: 1.05, voiceName: '' };
         }
 
-        // Use ResponsiveVoice for natural human-like voice if available
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        const allVoices = window.speechSynthesis.getVoices();
+
+        // 1. If user chose a specific voice, use it directly via browser API
+        if (voiceSettings.voiceName) {
+            const selected = allVoices.find(v => v.name === voiceSettings.voiceName);
+            if (selected) {
+                utterance.voice = selected;
+                utterance.rate = selected.name.includes("Google") ? (voiceSettings.rate || 0.9) * 1.1 : (voiceSettings.rate || 0.9);
+                utterance.pitch = voiceSettings.pitch || 1.05;
+                window.speechSynthesis.speak(utterance);
+                return;
+            }
+        }
+
+        // 2. Fallback to ResponsiveVoice for "Natural" default if no specific voice selected
         if (window.responsiveVoice && window.responsiveVoice.voiceSupport()) {
             window.responsiveVoice.cancel();
             window.responsiveVoice.speak(text, "UK English Female", {
                 pitch: voiceSettings.pitch || 1,
-                rate: (voiceSettings.rate || 0.9) * 1.1, // Slight boost for natural flow
+                rate: (voiceSettings.rate || 0.9) * 1.1,
                 volume: 1
             });
         } else {
-            // Fallback: browser speech with best available natural voice
-            window.speechSynthesis.cancel();
-            const utterance = new SpeechSynthesisUtterance(text);
-            const voices = window.speechSynthesis.getVoices();
-
-            // Priority list for "natural" sounding voices
+            // 3. Fallback: browser speech with best available natural voice
             const preferredVoice =
-                voices.find(v => voiceSettings.voiceName && v.name === voiceSettings.voiceName) ||
-                voices.find(v => v.name.includes("Google US English") && v.lang.includes("en")) ||
-                voices.find(v => v.name.includes("Natural") || v.name.includes("Online")) ||
-                voices.find(v => v.name.includes("Samantha") || v.name.includes("Siri")) ||
-                voices.find(v => v.name.includes("Female") && v.lang.startsWith("en"));
+                allVoices.find(v => v.name.includes("Google US English") && v.lang.includes("en")) ||
+                allVoices.find(v => v.name.includes("Natural") || v.name.includes("Online")) ||
+                allVoices.find(v => v.name.includes("Samantha") || v.name.includes("Siri")) ||
+                allVoices.find(v => v.name.includes("Female") && v.lang.startsWith("en"));
 
             if (preferredVoice) {
                 utterance.voice = preferredVoice;
-                // Neural/Google voices often need a slightly faster rate to sound natural
                 utterance.rate = preferredVoice.name.includes("Google") ? (voiceSettings.rate || 0.9) * 1.1 : (voiceSettings.rate || 0.9);
             } else {
                 utterance.rate = voiceSettings.rate || 0.9;

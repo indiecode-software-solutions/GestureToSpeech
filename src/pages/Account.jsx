@@ -134,6 +134,50 @@ export default function Account() {
     return { classes: entries.length, totalSamples };
   }, [classes]);
 
+  const speak = (text) => {
+    if (!text?.trim()) return;
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const allVoices = window.speechSynthesis.getVoices();
+
+    // 1. If user chose a specific voice, use it directly via browser API
+    if (voiceSettings.voiceName) {
+      const selected = allVoices.find(v => v.name === voiceSettings.voiceName);
+      if (selected) {
+        utterance.voice = selected;
+        utterance.rate = selected.name.includes("Google") ? (voiceSettings.rate || 0.95) * 1.1 : (voiceSettings.rate || 0.95);
+        utterance.pitch = voiceSettings.pitch || 1;
+        window.speechSynthesis.speak(utterance);
+        setStatus(`Spoken with ${selected.name}`);
+        return;
+      }
+    }
+
+    // 2. Fallback to ResponsiveVoice for "Natural" default if no specific voice selected
+    if (window.responsiveVoice && window.responsiveVoice.voiceSupport()) {
+      window.responsiveVoice.cancel();
+      window.responsiveVoice.speak(text, "UK English Female", {
+        pitch: voiceSettings.pitch || 1,
+        rate: (voiceSettings.rate || 0.95) * 1.1,
+        volume: 1
+      });
+      setStatus('Spoken (Premium Fallback).');
+    } else {
+      // 3. Fallback to best available system voice
+      const preferredVoice =
+        allVoices.find(v => v.name.includes("Google US English") && v.lang.includes("en")) ||
+        allVoices.find(v => v.name.includes("Natural") || v.name.includes("Online")) ||
+        allVoices.find(v => v.name.includes("Samantha") || v.name.includes("Siri")) ||
+        allVoices.find(v => v.name.includes("Female") && v.lang.startsWith("en"));
+
+      if (preferredVoice) utterance.voice = preferredVoice;
+      utterance.rate = voiceSettings.rate || 0.95;
+      utterance.pitch = voiceSettings.pitch || 1;
+      window.speechSynthesis.speak(utterance);
+      setStatus('Spoken.');
+    }
+  };
 
   const copy = async (text) => {
     try {
