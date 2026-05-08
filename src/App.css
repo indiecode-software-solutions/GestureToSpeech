@@ -407,3 +407,103 @@ body {
   50% { opacity: 0.6; transform: scale(0.9); }
   100% { opacity: 1; transform: scale(1); }
 }
+/* Smart Mode Toggle */
+.smart-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: rgba(119, 141, 169, 0.1);
+  border: 1px solid var(--bg-surface);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.2s var(--ease-standard);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.smart-toggle.active {
+  background: rgba(224, 225, 221, 0.15);
+  border-color: var(--text-platinum);
+  color: var(--text-platinum);
+  box-shadow: 0 0 10px rgba(224, 225, 221, 0.1);
+}
+
+.smart-toggle svg {
+  color: var(--accent);
+}
+
+.smart-toggle.active svg {
+  color: var(--text-platinum);
+  filter: drop-shadow(0 0 2px var(--text-platinum));
+}
+
+.smart-toggle:hover {
+  background: rgba(119, 141, 169, 0.2);
+}
+
+/* Polishing State */
+.polishing-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(13, 27, 42, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border-radius: 8px;
+  z-index: 10;
+  color: var(--text-platinum);
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 500;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Polished Output Box */
+.polished-box {
+  background: linear-gradient(135deg, rgba(119, 141, 169, 0.15), rgba(13, 27, 42, 0.4));
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-top: 4px;
+}
+
+.polished-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+}
+
+.polished-box p {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--text-platinum);
+  font-weight: 500;
+}
+
+.output-box.smart-active {
+  opacity: 0.6;
+  border-style: dotted;
+  font-size: 16px;
+}

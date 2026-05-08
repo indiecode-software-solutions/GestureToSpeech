@@ -9,7 +9,8 @@ const Camera = CameraNS.Camera || window.Camera;
 const drawConnectors = DrawingNS.drawConnectors || window.drawConnectors;
 const drawLandmarks = DrawingNS.drawLandmarks || window.drawLandmarks;
 import { motion, AnimatePresence } from "framer-motion";
-import { Layers, Mic, FileText, X, BookOpen, Activity, Download, GraduationCap, LogOut, User, CircleUserRound, MessageCircle } from 'lucide-react';
+import { Layers, Mic, FileText, X, BookOpen, Activity, Download, GraduationCap, LogOut, User, CircleUserRound, MessageCircle, Sparkles, Loader2 } from 'lucide-react';
+import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import GestureGuide from './GestureGuide';
 import TrainingPanel from './TrainingPanel';
@@ -192,8 +193,10 @@ export default function Dashboard() {
     const lastAddedTime = useRef(0);
     const lastGestureTime = useRef(Date.now());
     const [history, setHistory] = useState([]);
-    const [fps, setFps] = useState(0);
     const lastFrameTime = useRef(Date.now());
+    const [isSmartMode, setIsSmartMode] = useState(false);
+    const [isPolishing, setIsPolishing] = useState(false);
+    const [polishedSentence, setPolishedSentence] = useState("");
 
     // Auth Context
     const { currentUser, logout } = useAuth();
@@ -663,9 +666,63 @@ export default function Dashboard() {
         }
     }, []);
 
+    const polishSentence = async (rawText) => {
+        if (!rawText || rawText.trim() === "") return "";
+        const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY;
+        
+        if (!apiKey) {
+            console.error("OpenRouter API key missing!");
+            return rawText;
+        }
 
-    const speak = (text, options = {}) => {
+        setIsPolishing(true);
+        try {
+            const response = await axios.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                {
+                    model: "google/gemini-2.0-flash-001", // Or any other model
+                    messages: [
+                        {
+                            role: "system",
+                            content: "You are an expert Indian Sign Language (ISL) translator. Your task is to take raw, choppy word sequences (e.g., 'I HUNGER WATER') and transform them into natural, polite, and grammatically correct English sentences (e.g., 'I am feeling hungry, could you please get me some water?'). Keep the meaning exactly the same but make it sound natural. Output ONLY the polished sentence."
+                        },
+                        {
+                            role: "user",
+                            content: `Translate these raw gestures into a polite sentence: "${rawText}"`
+                        }
+                    ],
+                },
+                {
+                    headers: {
+                        "Authorization": `Bearer ${apiKey}`,
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": window.location.origin,
+                        "X-Title": "ISL Gesture App"
+                    }
+                }
+            );
+
+            const polished = response.data.choices[0].message.content.trim();
+            setPolishedSentence(polished);
+            return polished;
+        } catch (error) {
+            console.error("Error polishing sentence:", error);
+            return rawText;
+        } finally {
+            setIsPolishing(false);
+        }
+    };
+
+
+    const speak = async (text, options = {}) => {
         if (!text || text.trim() === '') return;
+
+        let textToSpeak = text;
+
+        // If Smart Mode is on and this is the main sentence, polish it first
+        if (isSmartMode && !options.fromAuto && text.trim() === sentence.trim()) {
+            textToSpeak = await polishSentence(text);
+        }
 
         if (options.fromAuto || text.trim() === sentence.trim()) {
             lastAutoSpokenSentenceRef.current = text.trim();
@@ -684,7 +741,7 @@ export default function Dashboard() {
         }
 
         window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
         const allVoices = window.speechSynthesis.getVoices();
 
         // 1. If user chose a specific voice, use it directly via browser API
@@ -702,7 +759,7 @@ export default function Dashboard() {
         // 2. Fallback to ResponsiveVoice for "Natural" default if no specific voice selected
         if (window.responsiveVoice && window.responsiveVoice.voiceSupport()) {
             window.responsiveVoice.cancel();
-            window.responsiveVoice.speak(text, "UK English Female", {
+            window.responsiveVoice.speak(textToSpeak, "UK English Female", {
                 pitch: voiceSettings.pitch || 1,
                 rate: (voiceSettings.rate || 0.9) * 1.1,
                 volume: 1
@@ -1084,28 +1141,64 @@ export default function Dashboard() {
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span className="text-overline">Translation Output</span>
-                            <span className="text-overline" style={{ color: 'var(--text-main)', cursor: 'pointer' }} onClick={() => setSentence("")}>Clear</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <div 
+                                    className={`smart-toggle ${isSmartMode ? 'active' : ''}`}
+                                    onClick={() => setIsSmartMode(!isSmartMode)}
+                                    title="AI Smart Mode: Polishes raw words into polite sentences"
+                                >
+                                    <Sparkles size={14} />
+                                    <span>Smart Mode</span>
+                                </div>
+                                <span className="text-overline" style={{ color: 'var(--text-main)', cursor: 'pointer', margin: 0 }} onClick={() => {
+                                    setSentence("");
+                                    setPolishedSentence("");
+                                }}>Clear</span>
+                            </div>
                         </div>
-                        <textarea
-                            className="output-box"
-                            value={sentence}
-                            onChange={(e) => setSentence(e.target.value)}
-                            placeholder="Translated text will appear here..."
-                            spellCheck="false"
-                            style={{
-                                width: '100%',
-                                resize: 'none',
-                                backgroundColor: 'var(--bg-deep)',
-                                border: '1px solid var(--bg-surface)',
-                                outline: 'none',
-                                color: 'var(--text-main)',
-                                padding: '16px',
-                                borderRadius: '8px',
-                                fontSize: '18px',
-                                lineHeight: '1.6',
-                                fontFamily: 'inherit'
-                            }}
-                        />
+                        <div style={{ position: 'relative', flex: 1 }}>
+                            <textarea
+                                className={`output-box ${isSmartMode ? 'smart-active' : ''}`}
+                                value={sentence}
+                                onChange={(e) => setSentence(e.target.value)}
+                                placeholder="Translated text will appear here..."
+                                spellCheck="false"
+                                style={{
+                                    width: '100%',
+                                    height: '100%',
+                                    resize: 'none',
+                                    backgroundColor: 'var(--bg-deep)',
+                                    border: '1px solid var(--bg-surface)',
+                                    outline: 'none',
+                                    color: 'var(--text-main)',
+                                    padding: '16px',
+                                    borderRadius: '8px',
+                                    fontSize: '18px',
+                                    lineHeight: '1.6',
+                                    fontFamily: 'inherit'
+                                }}
+                            />
+                            {isPolishing && (
+                                <div className="polishing-overlay">
+                                    <Loader2 className="animate-spin" size={24} />
+                                    <span>AI is polishing...</span>
+                                </div>
+                            )}
+                        </div>
+                        
+                        {isSmartMode && polishedSentence && (
+                            <motion.div 
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="polished-box"
+                            >
+                                <div className="polished-header">
+                                    <Sparkles size={12} />
+                                    <span>AI POLISHED</span>
+                                </div>
+                                <p>{polishedSentence}</p>
+                            </motion.div>
+                        )}
                     </div>
 
                     {/* Action Buttons */}
